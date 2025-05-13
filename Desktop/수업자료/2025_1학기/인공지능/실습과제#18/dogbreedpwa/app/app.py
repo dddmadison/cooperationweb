@@ -11,6 +11,8 @@ app = Flask(__name__)
 UPLOAD_FOLDER = 'static/uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 # 라벨 목록 (예: label.csv에서 추출된 120개의 견종 이름 리스트)
 labels = [...]  # ["beagle", "poodle", ...]
 

@@ -1,44 +1,45 @@
 from flask import Flask, render_template, request
-import os
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
-import numpy as np
-import pandas as pd
+import os, numpy as np, pandas as pd, time, gc
+import tflite_runtime.interpreter as tflite
+from PIL import Image
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'static/uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+UPLOAD = "static/uploads"
+os.makedirs(UPLOAD, exist_ok=True)
 
-labels_df = pd.read_csv("static/labels.csv")
-labels = labels_df["breed"].unique().tolist()
+# ── 라벨
+labels = pd.read_csv("static/labels.csv")["breed"].unique().tolist()
 
-def preprocess_img(img_path):
-    img = image.load_img(img_path, target_size=(224, 224))
-    img_array = image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0) / 255.0
-    return img_array
+# ── TFLite 모델 로드 (메모리 30~70 MB)
+interpreter = tflite.Interpreter(model_path="models/dog_breed_model.tflite")
+interpreter.allocate_tensors()
+input_index  = interpreter.get_input_details()[0]["index"]
+output_index = interpreter.get_output_details()[0]["index"]
 
-@app.route("/", methods=["GET", "POST"])
+def preprocess(path):
+    img = Image.open(path).convert("RGB").resize((224,224))
+    arr = np.expand_dims(np.asarray(img, dtype=np.float32)/255.0, 0)
+    return arr
+
+@app.route("/", methods=["GET","POST"])
 def index():
     if request.method == "POST":
-        file = request.files["file"]
-        if file and file.filename != "":
-            filename = file.filename
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
+        f = request.files.get("file")
+        if f and f.filename:
+            save = os.path.join(UPLOAD, f.filename)
+            f.save(save)
 
-            # ⚠️ 모델을 요청 시점에만 로드
-            model = load_model("models/dog_breed_model.keras")
+            t0 = time.time()
+            interpreter.set_tensor(input_index, preprocess(save))
+            interpreter.invoke()
+            preds = interpreter.get_tensor(output_index)[0]
+            elapsed = round(time.time()-t0, 2)
 
-            img_array = preprocess_img(filepath)
-            preds = model.predict(img_array)[0]
-            pred_idx = np.argmax(preds)
-            pred_label = labels[pred_idx]
-            confidence = preds[pred_idx] * 100
-
+            idx = int(np.argmax(preds))
             return render_template("result.html",
-                                   user_image=filepath,
-                                   dogcat_class=f"{pred_label} ({confidence:.1f}%)")
+                                   user_image=save,
+                                   dogcat_class=f"{labels[idx]} ({preds[idx]*100:.1f} %)",
+                                   elapsed=elapsed)
     return render_template("index.html")
 
 if __name__ == "__main__":
